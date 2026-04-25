@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { SafeText } from "@/components/safe-text";
+import { OfflineShoppingItemToggle } from "@/components/offline-shopping-item-toggle";
 import { RecipeShareControls } from "./recipe-share-controls";
 import { UrlImportForm } from "./url-import-form";
 import { getFeatureFlags } from "@/lib/feature-flags";
@@ -442,47 +443,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     revalidatePath("/dashboard");
   }
 
-  async function toggleShoppingListItem(formData: FormData) {
-    "use server";
-
-    const authClient = await createServerSupabaseClient();
-    const {
-      data: { user: authUser },
-    } = await authClient.auth.getUser();
-
-    if (!authUser) {
-      redirect("/login");
-    }
-
-    const itemId = String(formData.get("itemId") ?? "").trim();
-    if (!itemId) {
-      redirect(dashboardRedirect(formData, "Item id is required."));
-    }
-
-    const { data: itemRow, error: readError } = await authClient
-      .from("shopping_list_items")
-      .select("id, is_checked")
-      .eq("id", itemId)
-      .eq("user_id", authUser.id)
-      .maybeSingle();
-
-    if (readError || !itemRow) {
-      redirect(dashboardRedirect(formData, "Item not found."));
-    }
-
-    const nextChecked = !itemRow.is_checked;
-    await authClient
-      .from("shopping_list_items")
-      .update({
-        is_checked: nextChecked,
-        is_skipped: false,
-      })
-      .eq("id", itemId)
-      .eq("user_id", authUser.id);
-
-    revalidatePath("/dashboard");
-  }
-
   async function archiveShoppingList(formData: FormData) {
     "use server";
 
@@ -686,21 +646,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
                       .map((item) => (
                         <li key={item.id} className="text-zinc-700">
-                          <form action={toggleShoppingListItem} className="flex items-start gap-2">
-                            <LibraryPersistFields query={query} />
-                            <input type="hidden" name="itemId" value={item.id} />
-                            <button
-                              type="submit"
-                              className="mt-0.5 h-4 w-4 rounded border"
-                              aria-label={item.is_checked ? "Mark unchecked" : "Mark checked"}
-                            >
-                              {item.is_checked ? "✓" : ""}
-                            </button>
-                            <span className={item.is_checked || item.is_skipped ? "text-zinc-400 line-through" : ""}>
-                              <SafeText value={typeof item.item_text === "string" ? item.item_text : ""} />
-                              {item.is_skipped ? <span className="text-zinc-500"> (skipped)</span> : null}
-                            </span>
-                          </form>
+                          <OfflineShoppingItemToggle
+                            itemId={item.id}
+                            initialChecked={Boolean(item.is_checked)}
+                            initialSkipped={Boolean(item.is_skipped)}
+                            itemText={typeof item.item_text === "string" ? item.item_text : ""}
+                          />
                         </li>
                       ))}
                 </ul>
