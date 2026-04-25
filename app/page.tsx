@@ -3,6 +3,8 @@ import Link from "next/link";
 export default function Home() {
   const appEnvironment = process.env.NEXT_PUBLIC_APP_ENV ?? "not configured";
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "not configured";
+  const envReady =
+    appEnvironment !== "not configured" && supabaseUrl !== "not configured";
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-6 py-16 font-sans text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -25,6 +27,16 @@ export default function Home() {
             <span className="truncate">{supabaseUrl}</span>
           </div>
         </div>
+        {!envReady ? (
+          <p className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
+            Copy <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/50">.env.development.example</code> to{" "}
+            <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/50">.env.local</code>, fill in your Supabase
+            anon and service keys from the project dashboard, then restart{" "}
+            <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/50">npm run dev</code>. After that, sign in
+            and open <code className="rounded bg-amber-100/80 px-1 dark:bg-amber-900/50">/dashboard</code> for recipes
+            and lists.
+          </p>
+        ) : null}
         <div className="mt-6 flex gap-3">
           <Link className="rounded bg-black px-4 py-2 text-sm text-white" href="/signup">
             Create account

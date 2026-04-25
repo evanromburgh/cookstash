@@ -44,10 +44,19 @@ These are required for signup confirmation and password recovery links.
 After linking your Supabase project locally, apply migrations:
 
 ```bash
-supabase db push
+npx supabase db push
 ```
 
 This sets up RLS policies and feature flag infrastructure used by issue `#13`.
+
+To link this workspace to your hosted project:
+
+```bash
+npx supabase login
+npx supabase link --project-ref tbcjeoovhomafrpbepry
+```
+
+If login fails with permission errors, verify you are using a Supabase account with access to that project.
 
 ## Guardrails
 
