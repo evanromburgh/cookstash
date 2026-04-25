@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { SafeText } from "@/components/safe-text";
+import { RecipeShareControls } from "./recipe-share-controls";
 import { UrlImportForm } from "./url-import-form";
 import { getFeatureFlags } from "@/lib/feature-flags";
 import { recipeHasNonblankIngredients } from "@/lib/recipe-ingredients";
@@ -9,7 +10,16 @@ import { buildShoppingListItemRows } from "@/lib/shopping-list-items";
 import { mergeRecipeTags, parseTagsFromRow, RECIPE_PREDEFINED_TAGS } from "@/lib/recipe-tags";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
+const ARCHIVE_RETENTION_DAYS = 30;
+
 function parseIngredients(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
+function parseShoppingListItems(value: string) {
   return value
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -105,6 +115,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   }
 
   const { data: recipes } = await recipesQuery;
+  const { data: shareLinks } = await supabase
+    .from("recipe_share_links")
+    .select("recipe_id, token_hash, revoked_at")
+    .eq("owner_user_id", user.id);
+  const recipesWithActiveShareLinks = new Set(
+    (shareLinks ?? [])
+      .filter((row) => typeof row.token_hash === "string" && row.token_hash.length > 0 && !row.revoked_at)
+      .map((row) => row.recipe_id),
+  );
 
   const { data: tagSourceRows } = await supabase.from("recipes").select("tags");
   const tagFilterOptions = new Set<string>([...RECIPE_PREDEFINED_TAGS]);
@@ -117,10 +136,22 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     a.localeCompare(b, undefined, { sensitivity: "base" }),
   );
 
+  await supabase
+    .from("shopping_lists")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("status", "archived")
+    .lt("archived_until", new Date().toISOString());
+
   const { data: shoppingLists } = await supabase
     .from("shopping_lists")
-    .select("id, name, scale, created_at, recipes(name), shopping_list_items(item_text, position, is_checked)")
+    .select(
+      "id, name, scale, status, created_at, completed_at, archived_until, recipes(name), shopping_list_items(id, item_text, position, is_checked, is_skipped)",
+    )
     .order("created_at", { ascending: false });
+
+  const activeShoppingLists = (shoppingLists ?? []).filter((row) => row.status === "active");
+  const archivedShoppingLists = (shoppingLists ?? []).filter((row) => row.status === "archived");
 
   async function createRecipe(formData: FormData) {
     "use server";
@@ -357,6 +388,165 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     revalidatePath("/dashboard");
   }
 
+  async function createGeneralShoppingList(formData: FormData) {
+    "use server";
+
+    const authClient = await createServerSupabaseClient();
+    const {
+      data: { user: authUser },
+    } = await authClient.auth.getUser();
+
+    if (!authUser) {
+      redirect("/login");
+    }
+
+    const listName = String(formData.get("name") ?? "").trim();
+    const rawItems = String(formData.get("items") ?? "");
+    const items = parseShoppingListItems(rawItems);
+
+    if (!listName) {
+      redirect(dashboardRedirect(formData, "List name is required."));
+    }
+    if (items.length === 0) {
+      redirect(dashboardRedirect(formData, "Add at least one list item."));
+    }
+
+    const { data: listRow, error: listInsertError } = await authClient
+      .from("shopping_lists")
+      .insert({
+        user_id: authUser.id,
+        recipe_id: null,
+        name: listName.slice(0, 200),
+      })
+      .select("id")
+      .single();
+
+    if (listInsertError || !listRow) {
+      redirect(dashboardRedirect(formData, listInsertError?.message ?? "Failed to create list."));
+    }
+
+    const itemRows = items.map((item, index) => ({
+      shopping_list_id: listRow.id,
+      user_id: authUser.id,
+      item_text: item,
+      position: index,
+      source_recipe_id: null,
+    }));
+
+    const { error: itemInsertError } = await authClient.from("shopping_list_items").insert(itemRows);
+    if (itemInsertError) {
+      await authClient.from("shopping_lists").delete().eq("id", listRow.id).eq("user_id", authUser.id);
+      redirect(dashboardRedirect(formData, itemInsertError.message));
+    }
+
+    revalidatePath("/dashboard");
+  }
+
+  async function toggleShoppingListItem(formData: FormData) {
+    "use server";
+
+    const authClient = await createServerSupabaseClient();
+    const {
+      data: { user: authUser },
+    } = await authClient.auth.getUser();
+
+    if (!authUser) {
+      redirect("/login");
+    }
+
+    const itemId = String(formData.get("itemId") ?? "").trim();
+    if (!itemId) {
+      redirect(dashboardRedirect(formData, "Item id is required."));
+    }
+
+    const { data: itemRow, error: readError } = await authClient
+      .from("shopping_list_items")
+      .select("id, is_checked")
+      .eq("id", itemId)
+      .eq("user_id", authUser.id)
+      .maybeSingle();
+
+    if (readError || !itemRow) {
+      redirect(dashboardRedirect(formData, "Item not found."));
+    }
+
+    const nextChecked = !itemRow.is_checked;
+    await authClient
+      .from("shopping_list_items")
+      .update({
+        is_checked: nextChecked,
+        is_skipped: false,
+      })
+      .eq("id", itemId)
+      .eq("user_id", authUser.id);
+
+    revalidatePath("/dashboard");
+  }
+
+  async function archiveShoppingList(formData: FormData) {
+    "use server";
+
+    const authClient = await createServerSupabaseClient();
+    const {
+      data: { user: authUser },
+    } = await authClient.auth.getUser();
+
+    if (!authUser) {
+      redirect("/login");
+    }
+
+    const listId = String(formData.get("listId") ?? "").trim();
+    const skipRemaining = String(formData.get("skipRemaining") ?? "") === "1";
+    if (!listId) {
+      redirect(dashboardRedirect(formData, "List id is required."));
+    }
+
+    if (skipRemaining) {
+      await authClient
+        .from("shopping_list_items")
+        .update({ is_skipped: true, is_checked: false })
+        .eq("shopping_list_id", listId)
+        .eq("user_id", authUser.id)
+        .eq("is_checked", false);
+    }
+
+    const now = new Date();
+    const archivedUntil = new Date(now.getTime() + ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+
+    await authClient
+      .from("shopping_lists")
+      .update({
+        status: "archived",
+        completed_at: now.toISOString(),
+        archived_until: archivedUntil.toISOString(),
+      })
+      .eq("id", listId)
+      .eq("user_id", authUser.id);
+
+    revalidatePath("/dashboard");
+  }
+
+  async function deleteShoppingList(formData: FormData) {
+    "use server";
+
+    const authClient = await createServerSupabaseClient();
+    const {
+      data: { user: authUser },
+    } = await authClient.auth.getUser();
+
+    if (!authUser) {
+      redirect("/login");
+    }
+
+    const listId = String(formData.get("listId") ?? "").trim();
+    if (!listId) {
+      redirect(dashboardRedirect(formData, "List id is required."));
+    }
+
+    await authClient.from("shopping_lists").delete().eq("id", listId).eq("user_id", authUser.id);
+    revalidatePath("/dashboard");
+  }
+
   async function signOut() {
     "use server";
 
@@ -441,50 +631,140 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </form>
       </section>
       <section className="mt-8">
-        <h2 className="text-xl font-semibold">Shopping lists from recipes</h2>
+        <h2 className="text-xl font-semibold">Shopping lists</h2>
         <p className="mt-1 text-sm text-zinc-600">
-          Draft recipes (no ingredients) cannot create a list. This is enforced in the database as
-          well.
+          Create general lists or recipe-based lists. Complete any active list and optionally skip the
+          remaining unchecked items.
         </p>
-        <ul className="mt-4 space-y-2">
-          {(shoppingLists ?? []).map((row) => {
+        <form action={createGeneralShoppingList} className="mt-4 grid gap-3 rounded-md border p-4">
+          <LibraryPersistFields query={query} />
+          <input
+            name="name"
+            required
+            maxLength={200}
+            placeholder="General list name (e.g. Weekly groceries)"
+            className="rounded border px-3 py-2"
+          />
+          <textarea
+            name="items"
+            rows={4}
+            placeholder={"List items (one per line)\nExample: Bananas"}
+            className="rounded border px-3 py-2"
+          />
+          <button className="w-fit rounded border px-4 py-2 text-sm" type="submit">
+            Create general list
+          </button>
+        </form>
+        <h3 className="mt-6 text-lg font-semibold">Active</h3>
+        <ul className="mt-3 space-y-2">
+          {activeShoppingLists.map((row) => {
             const recipeName =
               row.recipes && typeof row.recipes === "object" && row.recipes !== null && "name" in row.recipes
                 ? String((row.recipes as { name: string | null }).name ?? "")
                 : "";
 
             return (
-              <li key={row.id} className="rounded-md border px-3 py-2 text-sm">
-                <span className="font-medium">
-                  <SafeText value={row.name ?? "List"} />
-                </span>
-                {recipeName ? (
-                  <span className="text-zinc-600">
-                    {" "}
-                    · recipe <SafeText value={recipeName} />
+              <li key={row.id} className="rounded-md border px-3 py-3 text-sm">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">
+                    <SafeText value={row.name ?? "List"} />
                   </span>
-                ) : null}
-                {typeof row.scale === "number" ? (
-                  <span className="text-zinc-600"> · scale {row.scale}x</span>
-                ) : null}
+                  {recipeName ? (
+                    <span className="text-zinc-600">
+                      · recipe <SafeText value={recipeName} />
+                    </span>
+                  ) : (
+                    <span className="text-zinc-600">· general</span>
+                  )}
+                  {typeof row.scale === "number" ? (
+                    <span className="text-zinc-600">· scale {row.scale}x</span>
+                  ) : null}
+                </div>
                 <ul className="mt-2 space-y-1">
                   {Array.isArray(row.shopping_list_items) &&
                     [...row.shopping_list_items]
                       .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
                       .map((item) => (
-                        <li key={`${row.id}-${item.position ?? 0}`} className="flex items-start gap-2 text-zinc-700">
-                          <input type="checkbox" checked={Boolean(item.is_checked)} readOnly aria-label="Completed" />
-                          <SafeText value={typeof item.item_text === "string" ? item.item_text : ""} />
+                        <li key={item.id} className="text-zinc-700">
+                          <form action={toggleShoppingListItem} className="flex items-start gap-2">
+                            <LibraryPersistFields query={query} />
+                            <input type="hidden" name="itemId" value={item.id} />
+                            <button
+                              type="submit"
+                              className="mt-0.5 h-4 w-4 rounded border"
+                              aria-label={item.is_checked ? "Mark unchecked" : "Mark checked"}
+                            >
+                              {item.is_checked ? "✓" : ""}
+                            </button>
+                            <span className={item.is_checked || item.is_skipped ? "text-zinc-400 line-through" : ""}>
+                              <SafeText value={typeof item.item_text === "string" ? item.item_text : ""} />
+                              {item.is_skipped ? <span className="text-zinc-500"> (skipped)</span> : null}
+                            </span>
+                          </form>
                         </li>
                       ))}
                 </ul>
+                <div className="mt-3 flex flex-wrap items-center gap-3">
+                  <form action={archiveShoppingList} className="flex flex-wrap items-center gap-2">
+                    <LibraryPersistFields query={query} />
+                    <input type="hidden" name="listId" value={row.id} />
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-600">
+                      <input type="checkbox" name="skipRemaining" value="1" className="rounded border" />
+                      Skip remaining unchecked items
+                    </label>
+                    <button type="submit" className="rounded border px-3 py-1.5 text-sm">
+                      Mark done
+                    </button>
+                  </form>
+                  <form action={deleteShoppingList}>
+                    <LibraryPersistFields query={query} />
+                    <input type="hidden" name="listId" value={row.id} />
+                    <button type="submit" className="rounded border px-3 py-1.5 text-sm">
+                      Delete
+                    </button>
+                  </form>
+                </div>
               </li>
             );
           })}
         </ul>
-        {shoppingLists?.length === 0 ? (
+        {activeShoppingLists.length === 0 ? (
           <p className="mt-2 rounded-md bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
-            No shopping lists yet. Use a recipe with ingredients below.
+            No active lists. Create a general list above or generate one from a recipe.
+          </p>
+        ) : null}
+        <h3 className="mt-6 text-lg font-semibold">Archive</h3>
+        <ul className="mt-3 space-y-2">
+          {archivedShoppingLists.map((row) => (
+            <li key={row.id} className="rounded-md border px-3 py-3 text-sm">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">
+                  <SafeText value={row.name ?? "List"} />
+                </span>
+                {row.completed_at ? (
+                  <span className="text-zinc-600">
+                    · completed {new Date(row.completed_at).toLocaleDateString()}
+                  </span>
+                ) : null}
+                {row.archived_until ? (
+                  <span className="text-zinc-600">
+                    · auto-delete {new Date(row.archived_until).toLocaleDateString()}
+                  </span>
+                ) : null}
+              </div>
+              <form action={deleteShoppingList} className="mt-2">
+                <LibraryPersistFields query={query} />
+                <input type="hidden" name="listId" value={row.id} />
+                <button type="submit" className="rounded border px-3 py-1.5 text-sm">
+                  Delete now
+                </button>
+              </form>
+            </li>
+          ))}
+        </ul>
+        {archivedShoppingLists.length === 0 ? (
+          <p className="mt-2 rounded-md bg-zinc-100 p-3 text-sm dark:bg-zinc-800">
+            No archived lists yet. Completed lists are kept for {ARCHIVE_RETENTION_DAYS} days.
           </p>
         ) : null}
       </section>
@@ -561,6 +841,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               )
               .join(", ");
             const isFavorite = Boolean(recipe.is_favorite);
+            const hasActiveShareLink = recipesWithActiveShareLinks.has(recipe.id);
 
             return (
               <article id={`recipe-${recipe.id}`} key={recipe.id} className="rounded-md border p-4">
@@ -683,6 +964,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                     </button>
                   </form>
                 )}
+                <RecipeShareControls recipeId={recipe.id} hasActiveShareLink={hasActiveShareLink} />
               </article>
             );
           })}

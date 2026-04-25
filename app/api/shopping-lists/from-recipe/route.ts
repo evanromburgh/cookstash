@@ -66,8 +66,9 @@ export async function POST(request: Request) {
       recipe_id: recipe.id,
       name: listName,
       scale,
+      status: "active",
     })
-    .select("id, name, scale, created_at")
+    .select("id, name, scale, status, created_at")
     .single();
 
   if (insertError || !row) {
