@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { SafeText } from "@/components/safe-text";
 import { OfflineShoppingItemToggle } from "@/components/offline-shopping-item-toggle";
 import { RecipeShareControls } from "./recipe-share-controls";
+import { RecipeDraftForm } from "./recipe-draft-form";
 import { UrlImportForm } from "./url-import-form";
 import { getFeatureFlags } from "@/lib/feature-flags";
 import { recipeHasNonblankIngredients } from "@/lib/recipe-ingredients";
@@ -544,51 +545,22 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <p className="mt-1 text-sm text-zinc-600">
           Drafts are valid with just a name. Add ingredients when ready.
         </p>
-        <form action={createRecipe} className="mt-4 grid gap-3">
-          <LibraryPersistFields query={query} />
-          <input
-            name="name"
-            required
-            placeholder="Recipe name"
-            className="rounded border px-3 py-2"
+        <div className="mt-4">
+          <RecipeDraftForm
+            mode="create"
+            libraryQuery={query}
+            action={createRecipe}
+            submitLabel="Save recipe"
+            initialValues={{
+              name: "",
+              sourceUrl: "",
+              ingredients: "",
+              instructions: "",
+              presetTags: [],
+              customTags: "",
+            }}
           />
-          <input name="sourceUrl" placeholder="Source URL (optional)" className="rounded border px-3 py-2" />
-          <textarea
-            name="ingredients"
-            rows={4}
-            placeholder={"Ingredients (one per line)\nExample: 2 tomatoes"}
-            className="rounded border px-3 py-2"
-          />
-          <textarea
-            name="instructions"
-            rows={4}
-            placeholder="Instructions (optional)"
-            className="rounded border px-3 py-2"
-          />
-          <fieldset className="grid gap-2 rounded border border-zinc-200 p-3 dark:border-zinc-700">
-            <legend className="px-1 text-sm font-medium">Tags (optional)</legend>
-            <p className="text-xs text-zinc-500">
-              Pick quick labels and/or add your own (comma or line separated).
-            </p>
-            <div className="flex flex-wrap gap-x-3 gap-y-2">
-              {RECIPE_PREDEFINED_TAGS.map((tag) => (
-                <label key={tag} className="flex items-center gap-1.5 text-sm capitalize">
-                  <input type="checkbox" name="presetTag" value={tag} className="rounded border" />
-                  {tag.replace(/-/g, " ")}
-                </label>
-              ))}
-            </div>
-            <textarea
-              name="customTags"
-              rows={2}
-              placeholder="Custom tags, e.g. italian, kid-friendly"
-              className="rounded border px-3 py-2 text-sm"
-            />
-          </fieldset>
-          <button className="w-fit rounded bg-black px-4 py-2 text-white" type="submit">
-            Save recipe
-          </button>
-        </form>
+        </div>
       </section>
       <section className="mt-8">
         <h2 className="text-xl font-semibold">Shopping lists</h2>
@@ -833,61 +805,23 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                     ))}
                   </ul>
                 ) : null}
-                <form action={updateRecipe} className="grid gap-3">
-                  <LibraryPersistFields query={query} />
-                  <input type="hidden" name="recipeId" value={recipe.id} />
-                  <input
-                    name="name"
-                    required
-                    defaultValue={recipe.name ?? ""}
-                    className="rounded border px-3 py-2"
-                  />
-                  <input
-                    name="sourceUrl"
-                    defaultValue={recipe.source_url ?? ""}
-                    placeholder="Source URL (optional)"
-                    className="rounded border px-3 py-2"
-                  />
-                  <textarea
-                    name="ingredients"
-                    rows={4}
-                    defaultValue={ingredientLines.join("\n")}
-                    className="rounded border px-3 py-2"
-                  />
-                  <textarea
-                    name="instructions"
-                    rows={4}
-                    defaultValue={recipe.instructions ?? ""}
-                    className="rounded border px-3 py-2"
-                  />
-                  <fieldset className="grid gap-2 rounded border border-zinc-200 p-3 dark:border-zinc-700">
-                    <legend className="px-1 text-sm font-medium">Tags</legend>
-                    <div className="flex flex-wrap gap-x-3 gap-y-2">
-                      {RECIPE_PREDEFINED_TAGS.map((tag) => (
-                        <label key={`${recipe.id}-${tag}`} className="flex items-center gap-1.5 text-sm capitalize">
-                          <input
-                            type="checkbox"
-                            name="presetTag"
-                            value={tag}
-                            defaultChecked={recipeTags.some((rt) => rt.toLowerCase() === tag)}
-                            className="rounded border"
-                          />
-                          {tag.replace(/-/g, " ")}
-                        </label>
-                      ))}
-                    </div>
-                    <textarea
-                      name="customTags"
-                      rows={2}
-                      defaultValue={customTagLines}
-                      placeholder="Custom tags (comma or line separated)"
-                      className="rounded border px-3 py-2 text-sm"
-                    />
-                  </fieldset>
-                  <button type="submit" className="w-fit rounded bg-black px-4 py-2 text-white">
-                    Update recipe
-                  </button>
-                </form>
+                <RecipeDraftForm
+                  mode="edit"
+                  recipeId={recipe.id}
+                  libraryQuery={query}
+                  action={updateRecipe}
+                  submitLabel="Update recipe"
+                  initialValues={{
+                    name: recipe.name ?? "",
+                    sourceUrl: recipe.source_url ?? "",
+                    ingredients: ingredientLines.join("\n"),
+                    instructions: recipe.instructions ?? "",
+                    presetTags: recipeTags.filter((rt) =>
+                      RECIPE_PREDEFINED_TAGS.some((tag) => tag.toLowerCase() === rt.toLowerCase()),
+                    ),
+                    customTags: customTagLines,
+                  }}
+                />
                 {isDraft ? (
                   <p className="mt-3 text-sm text-zinc-500">
                     Add ingredients to create a shopping list from this recipe.
