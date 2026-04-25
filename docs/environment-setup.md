@@ -27,7 +27,27 @@ Next.js local dev loads `.env.local` and development-scoped values.
 - `NEXT_PUBLIC_APP_ENV`: `development` or `production`
 - `NEXT_PUBLIC_SUPABASE_URL`: Supabase project URL for the active environment
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Supabase anon key for the active environment
+- `NEXT_PUBLIC_SITE_URL`: base URL used for auth email redirects
 - `SUPABASE_SERVICE_ROLE_KEY`: Server-side key for privileged operations only
+
+## 5) Supabase auth redirects
+
+In Supabase Auth settings, add:
+
+- `http://localhost:3000/auth/callback` for development.
+- `https://your-production-domain/auth/callback` for production.
+
+These are required for signup confirmation and password recovery links.
+
+## 6) Security migration baseline
+
+After linking your Supabase project locally, apply migrations:
+
+```bash
+supabase db push
+```
+
+This sets up RLS policies and feature flag infrastructure used by issue `#13`.
 
 ## Guardrails
 
