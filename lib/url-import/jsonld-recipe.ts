@@ -80,6 +80,28 @@ function ingredientLineFromItem(item: unknown): string | null {
   return null;
 }
 
+function ingredientDedupeKey(line: string): string {
+  // Conservative dedupe key: ignore letter casing and trailing sentence punctuation.
+  return line
+    .toLowerCase()
+    .replace(/[.;:,!?]+$/g, "")
+    .trim();
+}
+
+function dedupeIngredientLines(lines: string[]): string[] {
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const line of lines) {
+    const key = ingredientDedupeKey(line);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(line);
+  }
+  return deduped;
+}
+
 function normalizeIngredients(raw: unknown): string[] {
   if (raw === null || raw === undefined) {
     return [];
@@ -104,7 +126,7 @@ function normalizeIngredients(raw: unknown): string[] {
       break;
     }
   }
-  return out;
+  return dedupeIngredientLines(out);
 }
 
 function instructionFragment(raw: unknown): string | null {
