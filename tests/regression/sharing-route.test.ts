@@ -27,6 +27,7 @@ const mockedResolveShared = vi.mocked(resolveSharedRecipeByToken);
 const mockedHashToken = vi.mocked(hashShareToken);
 
 function buildSupabaseForShare() {
+  const auditInsert = vi.fn().mockResolvedValue({ error: null });
   return {
     auth: { getUser: vi.fn().mockResolvedValue({ data: { user: { id: "owner-1" } } }) },
     from: vi.fn((table: string) => {
@@ -49,11 +50,27 @@ function buildSupabaseForShare() {
           }),
         };
       }
+      if (table === "recipe_share_links") {
+        return {
+          upsert: vi.fn().mockResolvedValue({ error: null }),
+          update: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockResolvedValue({ error: null }),
+            }),
+          }),
+        };
+      }
+      if (table === "audit_logs") {
+        return {
+          insert: auditInsert,
+        };
+      }
 
-      return {
-        upsert: vi.fn().mockResolvedValue({ error: null }),
-      };
+      return {};
     }),
+    __spies: {
+      auditInsert,
+    },
   };
 }
 
@@ -117,5 +134,47 @@ describe("sharing controls regression", () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  it("logs revoke actions without exposing payload content", async () => {
+    const supabase = buildSupabaseForShare();
+    mockedCreateSupabase.mockResolvedValue(supabase as never);
+
+    const response = await POST(
+      new Request("http://localhost/api/share", {
+        method: "POST",
+        body: JSON.stringify({ action: "revoke", recipeId: "r1" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(
+      (supabase as { __spies: { auditInsert: ReturnType<typeof vi.fn> } }).__spies.auditInsert,
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actor_user_id: "owner-1",
+        action_type: "recipe_share_revoke",
+        target_type: "recipe_share_link",
+        target_id: "r1",
+      }),
+    );
+  });
+
+  it("does not fail revoke when audit logging fails", async () => {
+    const supabase = buildSupabaseForShare();
+    (supabase as { __spies: { auditInsert: ReturnType<typeof vi.fn> } }).__spies.auditInsert.mockResolvedValue({
+      error: { message: "audit insert failed" },
+    });
+    mockedCreateSupabase.mockResolvedValue(supabase as never);
+
+    const response = await POST(
+      new Request("http://localhost/api/share", {
+        method: "POST",
+        body: JSON.stringify({ action: "revoke", recipeId: "r1" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "revoked" });
   });
 });

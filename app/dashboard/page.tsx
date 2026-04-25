@@ -12,6 +12,7 @@ import { buildShoppingListItemRows } from "@/lib/shopping-list-items";
 import { mergeRecipeTags, parseTagsFromRow, RECIPE_PREDEFINED_TAGS } from "@/lib/recipe-tags";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { canonicalizeHttpUrlOrKeep } from "@/lib/url-import/canonicalize-url";
+import { logDestructiveAuditRecord } from "@/lib/audit-log";
 
 const ARCHIVE_RETENTION_DAYS = 30;
 
@@ -276,7 +277,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       redirect(dashboardRedirect(formData, "Recipe id is required for delete."));
     }
 
-    await authClient.from("recipes").delete().eq("id", recipeId).eq("user_id", authUser.id);
+    const { error: deleteError } = await authClient.from("recipes").delete().eq("id", recipeId).eq("user_id", authUser.id);
+    if (!deleteError) {
+      await logDestructiveAuditRecord(authClient, {
+        actorUserId: authUser.id,
+        actionType: "recipe_delete",
+        targetType: "recipe",
+        targetId: recipeId,
+      });
+    }
     revalidatePath("/dashboard");
   }
 
@@ -507,7 +516,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       redirect(dashboardRedirect(formData, "List id is required."));
     }
 
-    await authClient.from("shopping_lists").delete().eq("id", listId).eq("user_id", authUser.id);
+    const { error: deleteError } = await authClient.from("shopping_lists").delete().eq("id", listId).eq("user_id", authUser.id);
+    if (!deleteError) {
+      await logDestructiveAuditRecord(authClient, {
+        actorUserId: authUser.id,
+        actionType: "shopping_list_delete",
+        targetType: "shopping_list",
+        targetId: listId,
+      });
+    }
     revalidatePath("/dashboard");
   }
 

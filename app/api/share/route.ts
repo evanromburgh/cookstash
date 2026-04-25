@@ -4,6 +4,7 @@ import { getPublicEnvironment } from "@/lib/env";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { mintShareToken, resolveSharedRecipeByToken, hashShareToken } from "@/lib/recipe-sharing";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { logDestructiveAuditRecord } from "@/lib/audit-log";
 
 type ShareAction = "create" | "regenerate" | "revoke" | "saveCopy";
 type RecipeSharePayload = {
@@ -132,12 +133,13 @@ export async function POST(request: Request) {
   }
 
   if (action === "revoke") {
+    const revokedAt = new Date().toISOString();
     const { error: revokeError } = await supabase
       .from("recipe_share_links")
       .update({
-        revoked_at: new Date().toISOString(),
+        revoked_at: revokedAt,
         token_hash: null,
-        updated_at: new Date().toISOString(),
+        updated_at: revokedAt,
       })
       .eq("recipe_id", recipeId)
       .eq("owner_user_id", user.id);
@@ -145,6 +147,14 @@ export async function POST(request: Request) {
     if (revokeError) {
       return NextResponse.json({ error: revokeError.message }, { status: 400 });
     }
+
+    await logDestructiveAuditRecord(supabase, {
+      actorUserId: user.id,
+      actionType: "recipe_share_revoke",
+      targetType: "recipe_share_link",
+      targetId: recipeId,
+      happenedAt: revokedAt,
+    });
 
     return NextResponse.json({ status: "revoked" });
   }
