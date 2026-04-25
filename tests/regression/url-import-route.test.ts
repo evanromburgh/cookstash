@@ -11,18 +11,21 @@ vi.mock("@/lib/url-import/fetch-page-html", () => ({
 }));
 vi.mock("@/lib/url-import/jsonld-recipe", () => ({
   extractFirstJsonLdRecipeFromHtml: vi.fn(),
+  extractJsonLdRecipeCandidatesFromHtml: vi.fn(),
 }));
 
 import { POST } from "@/app/api/url-import/route";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { fetchPageHtml } from "@/lib/url-import/fetch-page-html";
-import { extractFirstJsonLdRecipeFromHtml } from "@/lib/url-import/jsonld-recipe";
+import {
+  extractJsonLdRecipeCandidatesFromHtml,
+} from "@/lib/url-import/jsonld-recipe";
 
 const mockedFeatureFlag = vi.mocked(isFeatureEnabled);
 const mockedCreateSupabase = vi.mocked(createServerSupabaseClient);
 const mockedFetchPageHtml = vi.mocked(fetchPageHtml);
-const mockedExtractRecipe = vi.mocked(extractFirstJsonLdRecipeFromHtml);
+const mockedExtractCandidates = vi.mocked(extractJsonLdRecipeCandidatesFromHtml);
 
 function mockSupabase(userId = "user-1") {
   const eqSourceUrl = vi.fn().mockReturnValue({
@@ -50,6 +53,7 @@ function mockSupabase(userId = "user-1") {
 describe("url import regression", () => {
   beforeEach(() => {
     mockedFeatureFlag.mockResolvedValue(true);
+    mockedExtractCandidates.mockReturnValue([]);
   });
 
   it("returns parsed recipe for happy path", async () => {
@@ -58,11 +62,13 @@ describe("url import regression", () => {
       finalUrl: "https://example.com/recipe",
       html: "<html></html>",
     });
-    mockedExtractRecipe.mockReturnValue({
-      name: "Pasta",
-      ingredients: ["1 tomato"],
-      instructions: "Cook it",
-    });
+    mockedExtractCandidates.mockReturnValue([
+      {
+        name: "Pasta",
+        ingredients: ["1 tomato"],
+        instructions: "Cook it",
+      },
+    ]);
 
     const response = await POST(
       new Request("http://localhost/api/url-import", {
@@ -78,13 +84,47 @@ describe("url import regression", () => {
     });
   });
 
+  it("returns recipe candidates when multiple valid payloads are found", async () => {
+    mockedCreateSupabase.mockResolvedValue(mockSupabase() as never);
+    mockedFetchPageHtml.mockResolvedValue({
+      finalUrl: "https://example.com/recipe-multi",
+      html: "<html></html>",
+    });
+    mockedExtractCandidates.mockReturnValue([
+      {
+        name: "Weeknight Pasta",
+        ingredients: ["1 tomato"],
+        instructions: "Cook it",
+      },
+      {
+        name: "Weekend Pasta",
+        ingredients: ["2 tomatoes"],
+        instructions: "Cook slowly",
+      },
+    ]);
+
+    const response = await POST(
+      new Request("http://localhost/api/url-import", {
+        method: "POST",
+        body: JSON.stringify({ url: "https://example.com/recipe-multi" }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      name: "Weeknight Pasta",
+      sourceUrl: "https://example.com/recipe-multi",
+      candidates: [{ name: "Weeknight Pasta" }, { name: "Weekend Pasta" }],
+    });
+  });
+
   it("returns fallback when no JSON-LD recipe payload exists", async () => {
     mockedCreateSupabase.mockResolvedValue(mockSupabase() as never);
     mockedFetchPageHtml.mockResolvedValue({
       finalUrl: "https://example.com/plain",
       html: "<html><head><title>Plain Page</title></head><body></body></html>",
     });
-    mockedExtractRecipe.mockReturnValue(null);
+    mockedExtractCandidates.mockReturnValue([]);
 
     const response = await POST(
       new Request("http://localhost/api/url-import", {
@@ -120,11 +160,13 @@ describe("url import regression", () => {
       finalUrl: "https://EXAMPLE.com:443/recipe?b=2&a=1#fragment",
       html: "<html></html>",
     });
-    mockedExtractRecipe.mockReturnValue({
-      name: "Pasta",
-      ingredients: [],
-      instructions: null,
-    });
+    mockedExtractCandidates.mockReturnValue([
+      {
+        name: "Pasta",
+        ingredients: ["1 tomato"],
+        instructions: "Cook it",
+      },
+    ]);
 
     const response = await POST(
       new Request("http://localhost/api/url-import", {
@@ -148,11 +190,13 @@ describe("url import regression", () => {
       finalUrl: "https://example.com/cache-target?b=2&a=1",
       html: "<html></html>",
     });
-    mockedExtractRecipe.mockReturnValue({
-      name: "Cached Pasta",
-      ingredients: ["1 tomato"],
-      instructions: "Cook it",
-    });
+    mockedExtractCandidates.mockReturnValue([
+      {
+        name: "Cached Pasta",
+        ingredients: ["1 tomato"],
+        instructions: "Cook it",
+      },
+    ]);
 
     const first = await POST(
       new Request("http://localhost/api/url-import", {
@@ -170,6 +214,6 @@ describe("url import regression", () => {
     expect(first.status).toBe(200);
     expect(second.status).toBe(200);
     expect(mockedFetchPageHtml).toHaveBeenCalledTimes(1);
-    expect(mockedExtractRecipe).toHaveBeenCalledTimes(1);
+    expect(mockedExtractCandidates).toHaveBeenCalledTimes(1);
   });
 });

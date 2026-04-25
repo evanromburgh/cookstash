@@ -243,8 +243,13 @@ function nodeHasUsableRecipeFields(
 }
 
 export function extractFirstJsonLdRecipeFromHtml(html: string): ExtractedJsonLdRecipe | null {
+  return extractJsonLdRecipeCandidatesFromHtml(html)[0] ?? null;
+}
+
+export function extractJsonLdRecipeCandidatesFromHtml(html: string): ExtractedJsonLdRecipe[] {
   LD_JSON_SCRIPT.lastIndex = 0;
   const matches = [...html.matchAll(LD_JSON_SCRIPT)];
+  const recipes: ExtractedJsonLdRecipe[] = [];
 
   for (const match of matches) {
     const raw = match[1]?.trim();
@@ -270,13 +275,13 @@ export function extractFirstJsonLdRecipeFromHtml(html: string): ExtractedJsonLdR
         continue;
       }
       const resolvedName = name.length > 0 ? name : "Imported recipe";
-      return {
+      recipes.push({
         name: resolvedName.slice(0, MAX_NAME_LEN),
         ingredients,
         instructions,
-      };
+      });
     }
   }
 
-  return null;
+  return recipes;
 }

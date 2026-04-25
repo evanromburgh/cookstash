@@ -32,7 +32,15 @@ type UrlImportApiOk = {
   ingredients: string[];
   instructions: string | null;
   sourceUrl: string;
+  candidates?: Array<{
+    name: string;
+    ingredients: string[];
+    instructions: string | null;
+  }>;
+  duplicateOf?: { id: string; name: string | null } | null;
 };
+
+type UrlImportCandidate = NonNullable<UrlImportApiOk["candidates"]>[number];
 
 type UrlImportApiErr = {
   error?: string;
@@ -51,6 +59,8 @@ export function UrlImportForm({ enabled, libraryQuery, createRecipe }: UrlImport
   const [busy, setBusy] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [preview, setPreview] = useState<UrlImportPreview | null>(null);
+  const [candidateRecipes, setCandidateRecipes] = useState<UrlImportCandidate[] | null>(null);
+  const [selectedCandidateIndex, setSelectedCandidateIndex] = useState(0);
   const [forceDuplicateSave, setForceDuplicateSave] = useState(false);
 
   if (!enabled) {
@@ -61,6 +71,8 @@ export function UrlImportForm({ enabled, libraryQuery, createRecipe }: UrlImport
     event.preventDefault();
     setFetchError(null);
     setBusy(true);
+    setCandidateRecipes(null);
+    setSelectedCandidateIndex(0);
     setForceDuplicateSave(false);
     try {
       const res = await fetch("/api/url-import", {
@@ -101,11 +113,16 @@ export function UrlImportForm({ enabled, libraryQuery, createRecipe }: UrlImport
         setPreview(null);
         return;
       }
+      const normalizedCandidates =
+        Array.isArray(data.candidates) && data.candidates.length > 1 ? data.candidates : null;
+      const selectedRecipe = normalizedCandidates?.[0] ?? data;
+      setCandidateRecipes(normalizedCandidates);
+      setSelectedCandidateIndex(0);
       setPreview({
-        name: data.name,
+        name: selectedRecipe.name,
         sourceUrl: data.sourceUrl,
-        ingredients: Array.isArray(data.ingredients) ? data.ingredients.join("\n") : "",
-        instructions: typeof data.instructions === "string" ? data.instructions : "",
+        ingredients: Array.isArray(selectedRecipe.ingredients) ? selectedRecipe.ingredients.join("\n") : "",
+        instructions: typeof selectedRecipe.instructions === "string" ? selectedRecipe.instructions : "",
         isFallback: false,
         duplicateOf: data.duplicateOf ?? null,
       });
@@ -162,7 +179,11 @@ export function UrlImportForm({ enabled, libraryQuery, createRecipe }: UrlImport
           <p className="mt-1 text-sm text-zinc-600">
             Fields below are filled from structured data on the page. Adjust anything, then save.
           </p>
-          <form key={preview.sourceUrl} action={createRecipe} className="mt-4 grid gap-3">
+          <form
+            key={`${preview.sourceUrl}-${selectedCandidateIndex}`}
+            action={createRecipe}
+            className="mt-4 grid gap-3"
+          >
             <LibraryHiddenFields query={libraryQuery} />
             <input type="hidden" name="sourceUrl" value={preview.sourceUrl} />
             <input
@@ -175,6 +196,42 @@ export function UrlImportForm({ enabled, libraryQuery, createRecipe }: UrlImport
                 Auto-import is not supported for this URL. We pre-filled what we could so you can
                 finish the recipe manually.
               </p>
+            ) : null}
+            {candidateRecipes && candidateRecipes.length > 1 ? (
+              <fieldset className="grid gap-2 rounded border border-zinc-200 p-3 dark:border-zinc-700">
+                <legend className="px-1 text-sm font-medium">Recipe candidates found on page</legend>
+                <p className="text-xs text-zinc-500">
+                  This page contains multiple recipe payloads. Pick one to pre-fill the form.
+                </p>
+                <div className="flex flex-col gap-2">
+                  {candidateRecipes.map((candidate, index) => (
+                    <label key={`${candidate.name}-${index}`} className="flex items-start gap-2 text-sm">
+                      <input
+                        type="radio"
+                        name="candidateRecipe"
+                        value={index}
+                        checked={selectedCandidateIndex === index}
+                        onChange={() => {
+                          setSelectedCandidateIndex(index);
+                          setPreview((current) =>
+                            current
+                              ? {
+                                  ...current,
+                                  name: candidate.name,
+                                  ingredients: candidate.ingredients.join("\n"),
+                                  instructions: candidate.instructions ?? "",
+                                }
+                              : current,
+                          );
+                        }}
+                      />
+                      <span className="leading-5">
+                        {candidate.name || `Recipe candidate ${index + 1}`}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
             ) : null}
             {preview.duplicateOf && !forceDuplicateSave ? (
               <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-100">
@@ -262,6 +319,8 @@ export function UrlImportForm({ enabled, libraryQuery, createRecipe }: UrlImport
                 className="rounded border px-4 py-2 text-sm"
                 onClick={() => {
                   setPreview(null);
+                  setCandidateRecipes(null);
+                  setSelectedCandidateIndex(0);
                   setFetchError(null);
                   setForceDuplicateSave(false);
                 }}

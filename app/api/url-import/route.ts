@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 
 import { fetchPageHtml } from "@/lib/url-import/fetch-page-html";
-import { extractFirstJsonLdRecipeFromHtml } from "@/lib/url-import/jsonld-recipe";
+import {
+  extractFirstJsonLdRecipeFromHtml,
+  extractJsonLdRecipeCandidatesFromHtml,
+} from "@/lib/url-import/jsonld-recipe";
 import { canonicalizeUrl } from "@/lib/url-import/canonicalize-url";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
@@ -47,6 +50,7 @@ type CachedImportParse = {
   expiresAt: number;
   finalUrl: string;
   recipe: ReturnType<typeof extractFirstJsonLdRecipeFromHtml>;
+  recipeCandidates: ReturnType<typeof extractJsonLdRecipeCandidatesFromHtml>;
   fallbackName: string;
 };
 
@@ -115,18 +119,21 @@ export async function POST(request: Request) {
 
     let finalUrl: string;
     let recipe: ReturnType<typeof extractFirstJsonLdRecipeFromHtml>;
+    let recipeCandidates: ReturnType<typeof extractJsonLdRecipeCandidatesFromHtml>;
     let fallbackName: string;
 
     if (cached) {
-      ({ finalUrl, recipe, fallbackName } = cached);
+      ({ finalUrl, recipe, recipeCandidates, fallbackName } = cached);
     } else {
       const page = await fetchPageHtml(canonicalInputUrl);
       finalUrl = canonicalizeUrl(page.finalUrl);
-      recipe = extractFirstJsonLdRecipeFromHtml(page.html);
+      recipeCandidates = extractJsonLdRecipeCandidatesFromHtml(page.html);
+      recipe = recipeCandidates[0] ?? null;
       fallbackName = extractHtmlTitle(page.html) ?? "Imported recipe";
       setCachedImportParse(canonicalInputUrl, {
         finalUrl,
         recipe,
+        recipeCandidates,
         fallbackName,
       });
     }
@@ -154,13 +161,22 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({
+    const response = {
       name: recipe.name,
       ingredients: recipe.ingredients,
       instructions: recipe.instructions,
       sourceUrl: finalUrl,
       duplicateOf: duplicate ?? null,
-    });
+    };
+
+    if (recipeCandidates.length > 1) {
+      return NextResponse.json({
+        ...response,
+        candidates: recipeCandidates,
+      });
+    }
+
+    return NextResponse.json(response);
   } catch (e) {
     const message = e instanceof Error ? e.message : "Import failed";
     const { status, body: errBody } = classifyImportError(message);
