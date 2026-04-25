@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 
 import { fetchPageHtml } from "@/lib/url-import/fetch-page-html";
 import { extractFirstJsonLdRecipeFromHtml } from "@/lib/url-import/jsonld-recipe";
+import { canonicalizeUrl } from "@/lib/url-import/canonicalize-url";
 import { isFeatureEnabled } from "@/lib/feature-flags";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 
@@ -38,6 +39,36 @@ function classifyImportError(message: string): { status: number; body: string } 
     return { status: 413, body: message };
   }
   return { status: 502, body: message };
+}
+
+const PARSE_CACHE_TTL_MS = 30_000;
+
+type CachedImportParse = {
+  expiresAt: number;
+  finalUrl: string;
+  recipe: ReturnType<typeof extractFirstJsonLdRecipeFromHtml>;
+  fallbackName: string;
+};
+
+const importParseCache = new Map<string, CachedImportParse>();
+
+function getCachedImportParse(canonicalUrl: string): CachedImportParse | null {
+  const cached = importParseCache.get(canonicalUrl);
+  if (!cached) {
+    return null;
+  }
+  if (cached.expiresAt <= Date.now()) {
+    importParseCache.delete(canonicalUrl);
+    return null;
+  }
+  return cached;
+}
+
+function setCachedImportParse(canonicalUrl: string, value: Omit<CachedImportParse, "expiresAt">): void {
+  importParseCache.set(canonicalUrl, {
+    ...value,
+    expiresAt: Date.now() + PARSE_CACHE_TTL_MS,
+  });
 }
 
 export async function POST(request: Request) {
@@ -79,8 +110,27 @@ export async function POST(request: Request) {
   }
 
   try {
-    const { finalUrl, html } = await fetchPageHtml(url);
-    const recipe = extractFirstJsonLdRecipeFromHtml(html);
+    const canonicalInputUrl = canonicalizeUrl(url);
+    const cached = getCachedImportParse(canonicalInputUrl);
+
+    let finalUrl: string;
+    let recipe: ReturnType<typeof extractFirstJsonLdRecipeFromHtml>;
+    let fallbackName: string;
+
+    if (cached) {
+      ({ finalUrl, recipe, fallbackName } = cached);
+    } else {
+      const page = await fetchPageHtml(canonicalInputUrl);
+      finalUrl = canonicalizeUrl(page.finalUrl);
+      recipe = extractFirstJsonLdRecipeFromHtml(page.html);
+      fallbackName = extractHtmlTitle(page.html) ?? "Imported recipe";
+      setCachedImportParse(canonicalInputUrl, {
+        finalUrl,
+        recipe,
+        fallbackName,
+      });
+    }
+
     const { data: duplicate } = await supabase
       .from("recipes")
       .select("id, name")
@@ -90,7 +140,6 @@ export async function POST(request: Request) {
       .maybeSingle();
 
     if (!recipe) {
-      const fallbackName = extractHtmlTitle(html) ?? "Imported recipe";
       return NextResponse.json(
         {
           error:

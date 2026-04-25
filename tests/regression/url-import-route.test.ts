@@ -25,21 +25,25 @@ const mockedFetchPageHtml = vi.mocked(fetchPageHtml);
 const mockedExtractRecipe = vi.mocked(extractFirstJsonLdRecipeFromHtml);
 
 function mockSupabase(userId = "user-1") {
+  const eqSourceUrl = vi.fn().mockReturnValue({
+    limit: vi.fn().mockReturnValue({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null }),
+    }),
+  });
+  const eqUserId = vi.fn().mockReturnValue({
+    eq: eqSourceUrl,
+  });
+  const select = vi.fn().mockReturnValue({
+    eq: eqUserId,
+  });
   return {
     auth: {
       getUser: vi.fn().mockResolvedValue({ data: { user: userId ? { id: userId } : null } }),
     },
-    from: vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockReturnValue({
-          eq: vi.fn().mockReturnValue({
-            limit: vi.fn().mockReturnValue({
-              maybeSingle: vi.fn().mockResolvedValue({ data: null }),
-            }),
-          }),
-        }),
-      }),
-    }),
+    from: vi.fn().mockReturnValue({ select }),
+    __spies: {
+      eqSourceUrl,
+    },
   };
 }
 
@@ -107,5 +111,65 @@ describe("url import regression", () => {
     );
 
     expect(response.status).toBe(400);
+  });
+
+  it("canonicalizes url before duplicate lookup and response payload", async () => {
+    const supabase = mockSupabase();
+    mockedCreateSupabase.mockResolvedValue(supabase as never);
+    mockedFetchPageHtml.mockResolvedValue({
+      finalUrl: "https://EXAMPLE.com:443/recipe?b=2&a=1#fragment",
+      html: "<html></html>",
+    });
+    mockedExtractRecipe.mockReturnValue({
+      name: "Pasta",
+      ingredients: [],
+      instructions: null,
+    });
+
+    const response = await POST(
+      new Request("http://localhost/api/url-import", {
+        method: "POST",
+        body: JSON.stringify({ url: "https://Example.com:443/recipe?b=2&a=1#ignore" }),
+      }),
+    );
+
+    const body = await response.json();
+    expect(response.status).toBe(200);
+    expect(body.sourceUrl).toBe("https://example.com/recipe?a=1&b=2");
+    expect((supabase as { __spies: { eqSourceUrl: ReturnType<typeof vi.fn> } }).__spies.eqSourceUrl).toHaveBeenCalledWith(
+      "source_url",
+      "https://example.com/recipe?a=1&b=2",
+    );
+  });
+
+  it("reuses cached parse results for repeated canonical url retries", async () => {
+    mockedCreateSupabase.mockResolvedValue(mockSupabase() as never);
+    mockedFetchPageHtml.mockResolvedValue({
+      finalUrl: "https://example.com/cache-target?b=2&a=1",
+      html: "<html></html>",
+    });
+    mockedExtractRecipe.mockReturnValue({
+      name: "Cached Pasta",
+      ingredients: ["1 tomato"],
+      instructions: "Cook it",
+    });
+
+    const first = await POST(
+      new Request("http://localhost/api/url-import", {
+        method: "POST",
+        body: JSON.stringify({ url: "https://example.com/cache-target?a=1&b=2" }),
+      }),
+    );
+    const second = await POST(
+      new Request("http://localhost/api/url-import", {
+        method: "POST",
+        body: JSON.stringify({ url: "https://example.com/cache-target?b=2&a=1#x" }),
+      }),
+    );
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(mockedFetchPageHtml).toHaveBeenCalledTimes(1);
+    expect(mockedExtractRecipe).toHaveBeenCalledTimes(1);
   });
 });

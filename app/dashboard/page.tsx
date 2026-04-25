@@ -11,6 +11,7 @@ import { recipeHasNonblankIngredients } from "@/lib/recipe-ingredients";
 import { buildShoppingListItemRows } from "@/lib/shopping-list-items";
 import { mergeRecipeTags, parseTagsFromRow, RECIPE_PREDEFINED_TAGS } from "@/lib/recipe-tags";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { canonicalizeHttpUrlOrKeep } from "@/lib/url-import/canonicalize-url";
 
 const ARCHIVE_RETENTION_DAYS = 30;
 
@@ -168,7 +169,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     }
 
     const name = String(formData.get("name") ?? "").trim();
-    const sourceUrlRaw = String(formData.get("sourceUrl") ?? "").trim();
+    const sourceUrlRaw = String(formData.get("sourceUrl") ?? "");
+    const sourceUrl = canonicalizeHttpUrlOrKeep(sourceUrlRaw);
     const allowDuplicateSourceUrl = String(formData.get("allowDuplicateSourceUrl") ?? "") === "1";
     const instructionsRaw = String(formData.get("instructions") ?? "").trim();
     const ingredientsRaw = String(formData.get("ingredients") ?? "");
@@ -180,12 +182,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       redirect(dashboardRedirect(formData, "Recipe name is required."));
     }
 
-    if (sourceUrlRaw && !allowDuplicateSourceUrl) {
+    if (sourceUrl && !allowDuplicateSourceUrl) {
       const { data: existing } = await authClient
         .from("recipes")
         .select("id, name")
         .eq("user_id", authUser.id)
-        .eq("source_url", sourceUrlRaw)
+        .eq("source_url", sourceUrl)
         .limit(1)
         .maybeSingle();
 
@@ -204,7 +206,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
     await authClient.from("recipes").insert({
       user_id: authUser.id,
       name,
-      source_url: sourceUrlRaw || null,
+      source_url: sourceUrl || null,
       instructions: instructionsRaw || null,
       ingredients,
       tags,
@@ -227,7 +229,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
     const recipeId = String(formData.get("recipeId") ?? "");
     const name = String(formData.get("name") ?? "").trim();
-    const sourceUrlRaw = String(formData.get("sourceUrl") ?? "").trim();
+    const sourceUrlRaw = String(formData.get("sourceUrl") ?? "");
+    const sourceUrl = canonicalizeHttpUrlOrKeep(sourceUrlRaw);
     const instructionsRaw = String(formData.get("instructions") ?? "").trim();
     const ingredientsRaw = String(formData.get("ingredients") ?? "");
     const presetTags = formData.getAll("presetTag").map((v) => String(v));
@@ -244,7 +247,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       .from("recipes")
       .update({
         name,
-        source_url: sourceUrlRaw || null,
+        source_url: sourceUrl || null,
         instructions: instructionsRaw || null,
         ingredients,
         tags,
