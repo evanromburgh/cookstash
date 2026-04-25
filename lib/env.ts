@@ -1,7 +1,8 @@
 type RequiredEnvironmentVariable =
   | "NEXT_PUBLIC_APP_ENV"
   | "NEXT_PUBLIC_SUPABASE_URL"
-  | "NEXT_PUBLIC_SUPABASE_ANON_KEY";
+  | "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+  | "NEXT_PUBLIC_SITE_URL";
 
 function getRequiredEnv(name: RequiredEnvironmentVariable): string {
   const value = process.env[name];
@@ -24,5 +25,6 @@ export function getPublicEnvironment() {
     appEnvironment,
     supabaseUrl: getRequiredEnv("NEXT_PUBLIC_SUPABASE_URL"),
     supabaseAnonKey: getRequiredEnv("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
+    siteUrl: getRequiredEnv("NEXT_PUBLIC_SITE_URL"),
   };
 }

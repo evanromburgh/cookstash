@@ -1,7 +1,8 @@
-import { getPublicEnvironment } from "@/lib/env";
+import Link from "next/link";
 
 export default function Home() {
-  const { appEnvironment, supabaseUrl } = getPublicEnvironment();
+  const appEnvironment = process.env.NEXT_PUBLIC_APP_ENV ?? "not configured";
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "not configured";
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-6 py-16 font-sans text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100">
@@ -23,6 +24,14 @@ export default function Home() {
             <span className="font-medium">Supabase URL</span>
             <span className="truncate">{supabaseUrl}</span>
           </div>
+        </div>
+        <div className="mt-6 flex gap-3">
+          <Link className="rounded bg-black px-4 py-2 text-sm text-white" href="/signup">
+            Create account
+          </Link>
+          <Link className="rounded border px-4 py-2 text-sm" href="/login">
+            Sign in
+          </Link>
         </div>
       </main>
     </div>
